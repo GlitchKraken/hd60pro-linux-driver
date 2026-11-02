@@ -834,6 +834,7 @@ void mz0380_dma_teardown(struct mz0380_dev *dev)
 	dev->h264_parameter_sets = NULL;
 	dev->h264_parameter_sets_len = 0;
 	mz0380_raw_probe_bufs_free(dev);
+	mz0380_audio_ring_free(dev);
 	mz0380_h264_bufs_free(dev);
 	mz0380_stream_bufs_free(dev);
 }

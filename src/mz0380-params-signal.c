@@ -733,6 +733,11 @@ module_param_named(aic_every_frame, mz0380_aic_every_frame, bool, 0644);
 MODULE_PARM_DESC(aic_every_frame,
 		 "M60: re-send SET_AIC(on=1) on every encoder spawn instead of once per session (def:0)");
 
+unsigned int mz0380_aic_input;
+module_param_named(aic_input, mz0380_aic_input, uint, 0644);
+MODULE_PARM_DESC(aic_input,
+		 "SET_AIC audio input (cmd+4). The card captures HDMI audio only for 0 (def:0; 2 with aic_channels=0 restores the old never-starts behaviour)");
+
 unsigned int mz0380_aic_channels = 2;
 module_param_named(aic_channels, mz0380_aic_channels, uint, 0644);
 MODULE_PARM_DESC(aic_channels, "M33: SET_AIC channel_num (def:2)");

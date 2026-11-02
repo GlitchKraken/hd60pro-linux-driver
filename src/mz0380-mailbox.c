@@ -122,6 +122,7 @@ void mz0380_mb_ack_event(struct mz0380_dev *dev)
 			smp_store_release(&dev->cmd_complete, true);
 			wake_up_all(&dev->cmd_wait);
 		}
+		mz0380_audio_note_event(dev, event);
 		mz0380_handle_event_snapshot(dev, event);
 	}
 	mz_cfg_write(dev, MZ0380_CFG_INT_FLAG, MZ0380_CFG_INT_ACK_VAL);

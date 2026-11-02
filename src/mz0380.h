@@ -377,6 +377,10 @@ struct mz0380_dev {
 	 * These must not alias: the two producers rotate independently.
 	 */
 	struct mz0380_stream_buf h264_bufs[MZ0380_STREAM_NR_BUFS];
+	/* window-3 HDMI audio ring and its last completion (audio-dma.c) */
+	struct mz0380_stream_buf audio_win3[MZ0380_AUDIO_PERIODS];
+	u32 audio_last_event;
+	u32 audio_last_token;
 	/* Opt-in Windows-parity window-0 banks: op 0x02 then independent op 0x08. */
 	struct mz0380_raw_probe_buf {
 		void *va;
@@ -786,6 +790,13 @@ int mz0380_enum_dv_timings(struct file *file, void *fh,
 int mz0380_dv_timings_cap(struct file *file, void *fh,
 			  struct v4l2_dv_timings_cap *cap);
 
+/* window-3 HDMI audio ring (mz0380-audio-dma.c) */
+int mz0380_audio_ring_alloc_iova(struct mz0380_dev *dev);
+void mz0380_audio_ring_free(struct mz0380_dev *dev);
+int mz0380_audio_program_ring(struct mz0380_dev *dev);
+void mz0380_audio_note_event(struct mz0380_dev *dev, u32 event);
+void mz0380_audio_ring_dump(struct mz0380_dev *dev);
+
 /* IT66121 HDMI OUT transmitter (mz0380-hdmitx.c) */
 int mz0380_hdmitx_enable(struct mz0380_dev *dev);
 void mz0380_hdmitx_status(struct mz0380_dev *dev);
@@ -824,11 +835,12 @@ int mz0380_i2cbb_edid_burn(struct mz0380_dev *dev, u8 sda, u8 scl, u8 addr7);
 #if IS_ENABLED(CONFIG_SND)
 int mz0380_audio_register(struct mz0380_dev *dev);
 void mz0380_audio_unregister(struct mz0380_dev *dev);
-void mz0380_audio_period_elapsed(struct mz0380_dev *dev);
+void mz0380_audio_period_elapsed(struct mz0380_dev *dev, unsigned int idx);
 #else
 static inline int mz0380_audio_register(struct mz0380_dev *dev) { return 0; }
 static inline void mz0380_audio_unregister(struct mz0380_dev *dev) {}
-static inline void mz0380_audio_period_elapsed(struct mz0380_dev *dev) {}
+static inline void mz0380_audio_period_elapsed(struct mz0380_dev *dev,
+						 unsigned int idx) {}
 #endif
 
 /*
@@ -860,6 +872,7 @@ extern bool mz0380_hdmitx;
 extern bool mz0380_hdmitx_hdmi;
 extern unsigned int mz0380_hdmitx_input;
 extern bool mz0380_hdmitx_audio;
+extern bool mz0380_audio_dma;
 extern unsigned int mz0380_hdmitx_mclk;
 extern bool mz0380_enable_dma;
 extern unsigned int mz0380_start_delay_ms;
@@ -916,6 +929,7 @@ extern unsigned int mz0380_hotplug_stall_ms;
 extern unsigned int mz0380_hotplug_retry_ms;
 extern unsigned int mz0380_signal_monitor_ms;
 extern unsigned int mz0380_no_signal_fps;
+extern unsigned int mz0380_aic_input;
 extern unsigned int mz0380_aic_channels;
 extern unsigned int mz0380_aic_bits;
 extern unsigned int mz0380_aic_freq;

@@ -293,10 +293,10 @@ module_param_named(dma_handshake, mz0380_dma_handshake, bool, 0444);
 MODULE_PARM_DESC(dma_handshake,
 		 "enable bus master + MSI (no ring programming) before the firmware handshake; M4 diagnostic (def:1 since M166)");
 
-bool mz0380_enable_audio;
+bool mz0380_enable_audio = true;
 module_param_named(enable_audio, mz0380_enable_audio, bool, 0444);
 MODULE_PARM_DESC(enable_audio,
-		 "register the experimental ALSA scaffold (PCM DMA is not implemented; def:0)");
+		 "register the 'HD60 Pro HDMI' ALSA capture device; audio flows while video streams (def:1)");
 
 unsigned int mz0380_video_ring_entries = 16;
 module_param_named(video_ring_entries, mz0380_video_ring_entries,

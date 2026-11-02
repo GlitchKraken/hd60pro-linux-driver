@@ -487,6 +487,17 @@
 #define MZ0380_H264_POISON_BYTE         0xcc
 
 /*
+ * Audio periods on window 3 (op 0x03), mz0380-audio-dma.c. The stereo
+ * capture app writes period idx (1..4) to the start of window-3 slot idx, so
+ * each period is its own buffer at its own 4 GiB-aligned IOVA. A period is
+ * at most 256 frames x 8 ch x 4 bytes = 8 KiB; 64 KiB shows any overrun.
+ */
+#define MZ0380_AUDIO_BUF_SIZE           0x10000
+#define MZ0380_AUDIO_PERIODS            4
+#define MZ0380_AUDIO_IOVA_SLOT          17	/* periods take 17..20 */
+#define MZ0380_AUDIO_POISON_BYTE        0x5c
+
+/*
  * Windows' HD60 Pro branch gives outbound window 0 two independent four-slot
  * banks.  Both op 0x02 and op 0x08 advertise this exact YUV422 allocation:
  * 2048-byte stride * 1125 lines * 2 bytes + a 4096-byte header.

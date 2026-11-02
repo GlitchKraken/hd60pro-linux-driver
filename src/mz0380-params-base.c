@@ -629,6 +629,11 @@ module_param_named(hdmitx_audio, mz0380_hdmitx_audio, bool, 0644);
 MODULE_PARM_DESC(hdmitx_audio,
 		 "Pass the receiver's I2S audio (2ch 48 kHz) through HDMI OUT; needs hdmitx_hdmi=1 (def:1)");
 
+bool mz0380_audio_dma = true;
+module_param_named(audio_dma, mz0380_audio_dma, bool, 0444);
+MODULE_PARM_DESC(audio_dma,
+		 "Register a host ring on window 3 (op 0x03) for the card's HDMI audio periods (def:1)");
+
 /* The receiver's MCLK ratio on this board is unproven; sweep 0-3 with "tx". */
 unsigned int mz0380_hdmitx_mclk = 1;
 module_param_named(hdmitx_mclk, mz0380_hdmitx_mclk, uint, 0644);

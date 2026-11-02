@@ -571,10 +571,19 @@ vic_done:
 	 */
 	if (mz0380_aic_on && (mz0380_aic_every_frame || !dev->aic_armed)) {
 		bool was_armed = dev->aic_armed;
+		/*
+		 * cmd+4 is the audio input, cmd+5 the channel count: the
+		 * labels in audio_capture_mgr's printf ("channel_num",
+		 * "mono") are wrong, its code is not. It starts the capture
+		 * app only for input 0 (HD product) and halves cmd+5 into
+		 * I2S pairs, so the old {channels, mono} packing read as
+		 * input 2 with 0 pairs and audio never ran. Windows prints
+		 * the same fields as "ai=%d, chs=%d".
+		 */
 		u32 aic[4] = {
-			/* cmd+4 channel_num | cmd+5 mono<<8 | cmd+6 bits<<16 */
-			(mz0380_aic_channels & 0xff) |
-			((u32)(mz0380_aic_channels == 1 ? 1 : 0) << 8) |
+			/* cmd+4 ai | cmd+5 chs<<8 | cmd+6 bits<<16 */
+			(mz0380_aic_input & 0xff) |
+			((mz0380_aic_channels & 0xff) << 8) |
 			((u32)(mz0380_aic_bits & 0xffff) << 16),
 			mz0380_aic_freq,			/* cmd+8  freq  */
 			(mz0380_aic_period_frames & 0xffff) |	/* cmd+12       */

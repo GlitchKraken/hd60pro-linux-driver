@@ -421,6 +421,9 @@ int mz0380_h264_program_bufs(struct mz0380_dev *dev)
 				  ARRAY_SIZE(params), NULL, 2000);
 	pr_info("%s: H.264 probe registered dedicated window1 ring (op 0x04, size=0x%x) ret=%d\n",
 		dev->name, MZ0380_H264_SET_BUF_SIZE, ret);
+	/* the audio window is re-registered wherever the encoded one is */
+	if (!ret && dev->audio_win3[0].va)
+		mz0380_audio_program_ring(dev);
 	return ret;
 }
 
@@ -853,6 +856,10 @@ int mz0380_dma_setup(struct mz0380_dev *dev)
 		pr_info("%s: H.264 diagnostic enabled: %u window1 buffers x %u KiB\n",
 			dev->name, MZ0380_STREAM_NR_BUFS,
 			MZ0380_H264_BUF_SIZE >> 10);
+		/* optional: losing audio must not cost video */
+		if (mz0380_audio_dma && mz0380_audio_ring_alloc_iova(dev))
+			pr_warn("%s: audio ring unavailable; HDMI audio capture disabled\n",
+				dev->name);
 		dev->h264_parameter_sets =
 			kzalloc(MZ0380_H264_PARAMETER_SETS_MAX, GFP_KERNEL);
 		if (!dev->h264_parameter_sets) {

@@ -675,6 +675,17 @@ ssize_t mz0380_proc_hdmi_write(struct file *file,
 	 * HDMI OUT: "tx" (re)runs the IT66121 bring-up, "txstat" logs its
 	 * status, "txw <reg> <val>" writes one register (0x100-0x1ff = bank 1).
 	 */
+	/* "audio" reports what the card has written into the window-3 ring */
+	if (!strcmp(cmd, "audio")) {
+		kfree(cmd);
+		mutex_lock(&devlist);
+		list_for_each_entry(dev, &mz0380_devlist, devlist)
+			mz0380_audio_ring_dump(dev);
+		mutex_unlock(&devlist);
+		*ppos += count;
+		return count;
+	}
+
 	if (!strcmp(cmd, "tx") || !strcmp(cmd, "txstat")) {
 		bool stat_only = cmd[2] == 's';
 
@@ -836,7 +847,7 @@ ssize_t mz0380_proc_hdmi_write(struct file *file,
 	 * request, so reject it and name the vocabulary instead.
 	 */
 	if (*cmd && !(*cmd >= '0' && *cmd <= '9')) {
-		pr_info("mz0380: unknown /proc/mz0380-hdmi command '%s' - known: hdmi, tx, txstat, txw, ramtest, wscan, edidhunt, gpiodump, i2cscan, edidburn, hpd, edid, watch, or legacy '0|2 [w h fps]'\n",
+		pr_info("mz0380: unknown /proc/mz0380-hdmi command '%s' - known: hdmi, audio, tx, txstat, txw, ramtest, wscan, edidhunt, gpiodump, i2cscan, edidburn, hpd, edid, watch, or legacy '0|2 [w h fps]'\n",
 			cmd);
 		kfree(cmd);
 		return -EINVAL;

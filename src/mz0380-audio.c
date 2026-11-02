@@ -2,16 +2,17 @@
 /*
  *  Driver for MZ0380 based capture cards.
  *
- *  Experimental ALSA HDMI audio scaffold.
+ *  ALSA capture of the HDMI audio the card extracts.
  *
- *  The card can extract PCM from HDMI, but the host address, ownership and
- *  completion protocol for that PCM is not yet proven.  dev->audio_ring is
- *  therefore never allocated or programmed and enable_audio remains off by
- *  default.  SET_AIC in the video path is separate: it releases tinyvenc's
- *  audio_ready gate and is required even when no ALSA device is registered.
+ *  The card pushes 16-bit stereo PCM into four host period buffers on
+ *  window 3 and signals each finished one through EVENT bits 16+ with the
+ *  period index in BAR0+0x4c (mz0380-audio-dma.c). This file copies every
+ *  finished period into the ALSA ring from that event, so the stream only
+ *  runs while the card's pipeline does - i.e. while video is streaming.
  */
 
 #include "mz0380.h"
+#include "mz0380-reg.h"
 
 #if IS_ENABLED(CONFIG_SND)
 
@@ -28,11 +29,23 @@ struct mz0380_pcm {
 	unsigned int period_bytes;
 	unsigned int buffer_bytes;
 	unsigned int hw_ptr_bytes;
+	unsigned int period_fill;
+	bool running;
 };
 
-#define MZ0380_AUDIO_RATE_MIN  32000
-#define MZ0380_AUDIO_RATE_MAX  48000
+#define MZ0380_AUDIO_RATE      48000
 #define MZ0380_AUDIO_CHANNELS  2
+
+/*
+ * What SET_AIC asked for: frames x periods per card period (the capture app
+ * reads -F x -B frames per transfer), 16-bit stereo. 256 x 4 x 4 = 4096.
+ */
+static unsigned int mz0380_card_period_bytes(void)
+{
+	return min_t(unsigned int, MZ0380_AUDIO_BUF_SIZE,
+		     mz0380_aic_period_frames * mz0380_aic_periods *
+		     MZ0380_AUDIO_CHANNELS * 2);
+}
 
 static const struct snd_pcm_hardware mz0380_pcm_hw = {
 	.info             = SNDRV_PCM_INFO_INTERLEAVED |
@@ -40,18 +53,16 @@ static const struct snd_pcm_hardware mz0380_pcm_hw = {
 			    SNDRV_PCM_INFO_MMAP |
 			    SNDRV_PCM_INFO_MMAP_VALID,
 	.formats          = SNDRV_PCM_FMTBIT_S16_LE,
-	.rates            = SNDRV_PCM_RATE_32000 |
-			    SNDRV_PCM_RATE_44100 |
-			    SNDRV_PCM_RATE_48000,
-	.rate_min         = MZ0380_AUDIO_RATE_MIN,
-	.rate_max         = MZ0380_AUDIO_RATE_MAX,
+	.rates            = SNDRV_PCM_RATE_48000,
+	.rate_min         = MZ0380_AUDIO_RATE,
+	.rate_max         = MZ0380_AUDIO_RATE,
 	.channels_min     = MZ0380_AUDIO_CHANNELS,
 	.channels_max     = MZ0380_AUDIO_CHANNELS,
 	.buffer_bytes_max = 256 * 1024,
 	.period_bytes_min = 1024,
 	.period_bytes_max = 64 * 1024,
 	.periods_min      = 2,
-	.periods_max      = 16,
+	.periods_max      = 64,
 };
 
 static int mz0380_pcm_open(struct snd_pcm_substream *ss)
@@ -60,8 +71,11 @@ static int mz0380_pcm_open(struct snd_pcm_substream *ss)
 	struct mz0380_pcm *pcm = dev->snd_pcm;
 
 	ss->runtime->hw = mz0380_pcm_hw;
+	/* the card delivers whole periods; match them so wakeups line up */
+	snd_pcm_hw_constraint_step(ss->runtime, 0,
+				   SNDRV_PCM_HW_PARAM_PERIOD_BYTES,
+				   mz0380_card_period_bytes());
 	pcm->substream = ss;
-	pcm->hw_ptr_bytes = 0;
 	return 0;
 }
 
@@ -70,6 +84,7 @@ static int mz0380_pcm_close(struct snd_pcm_substream *ss)
 	struct mz0380_dev *dev = snd_pcm_substream_chip(ss);
 	struct mz0380_pcm *pcm = dev->snd_pcm;
 
+	WRITE_ONCE(pcm->running, false);
 	pcm->substream = NULL;
 	return 0;
 }
@@ -85,28 +100,30 @@ static int mz0380_pcm_hw_params(struct snd_pcm_substream *ss,
 	return 0;
 }
 
-static int mz0380_pcm_hw_free(struct snd_pcm_substream *ss)
-{
-	return 0;
-}
-
 static int mz0380_pcm_prepare(struct snd_pcm_substream *ss)
 {
 	struct mz0380_dev *dev = snd_pcm_substream_chip(ss);
 	struct mz0380_pcm *pcm = dev->snd_pcm;
 
-	pcm->hw_ptr_bytes = 0;
+	WRITE_ONCE(pcm->hw_ptr_bytes, 0);
+	pcm->period_fill = 0;
 	return 0;
 }
 
+/* Never takes event_lock: mz0380_audio_period_elapsed() runs under it. */
 static int mz0380_pcm_trigger(struct snd_pcm_substream *ss, int cmd)
 {
+	struct mz0380_dev *dev = snd_pcm_substream_chip(ss);
+	struct mz0380_pcm *pcm = dev->snd_pcm;
+
 	switch (cmd) {
 	case SNDRV_PCM_TRIGGER_START:
 	case SNDRV_PCM_TRIGGER_RESUME:
+		WRITE_ONCE(pcm->running, true);
 		return 0;
 	case SNDRV_PCM_TRIGGER_STOP:
 	case SNDRV_PCM_TRIGGER_SUSPEND:
+		WRITE_ONCE(pcm->running, false);
 		return 0;
 	}
 	return -EINVAL;
@@ -117,67 +134,52 @@ static snd_pcm_uframes_t mz0380_pcm_pointer(struct snd_pcm_substream *ss)
 	struct mz0380_dev *dev = snd_pcm_substream_chip(ss);
 	struct mz0380_pcm *pcm = dev->snd_pcm;
 
-	return bytes_to_frames(ss->runtime, pcm->hw_ptr_bytes);
+	return bytes_to_frames(ss->runtime, READ_ONCE(pcm->hw_ptr_bytes));
 }
 
 static const struct snd_pcm_ops mz0380_pcm_ops = {
 	.open      = mz0380_pcm_open,
 	.close     = mz0380_pcm_close,
 	.hw_params = mz0380_pcm_hw_params,
-	.hw_free   = mz0380_pcm_hw_free,
 	.prepare   = mz0380_pcm_prepare,
 	.trigger   = mz0380_pcm_trigger,
 	.pointer   = mz0380_pcm_pointer,
 };
 
-void mz0380_audio_period_elapsed(struct mz0380_dev *dev)
+/*
+ * The card finished period @idx (0..3). Called from the event path under
+ * event_lock, in IRQ or poller context.
+ */
+void mz0380_audio_period_elapsed(struct mz0380_dev *dev, unsigned int idx)
 {
 	struct mz0380_pcm *pcm = dev->snd_pcm;
 	struct snd_pcm_substream *ss;
-	struct mz0380_ring *r = &dev->audio_ring;
-	u32 tail;
-	size_t produced;
-	void *dst;
+	unsigned int n, first, ptr;
+	const u8 *src;
+	u8 *dst;
 
-	if (!pcm || !pcm->substream)
+	if (!pcm || !READ_ONCE(pcm->running) || idx >= MZ0380_AUDIO_PERIODS)
 		return;
 	ss = pcm->substream;
+	src = dev->audio_win3[idx].va;
+	if (!ss || !src || !pcm->buffer_bytes)
+		return;
 
-	tail = mz_cfg_read(dev, r->tail_reg);
+	/* pair the endpoint's completion with its DMA, as the video path does */
+	dma_rmb();
+	n = min(mz0380_card_period_bytes(), pcm->buffer_bytes);
+	dst = ss->runtime->dma_area;
+	ptr = pcm->hw_ptr_bytes;
+	first = min(n, pcm->buffer_bytes - ptr);
+	memcpy(dst + ptr, src, first);
+	memcpy(dst, src + first, n - first);
+	WRITE_ONCE(pcm->hw_ptr_bytes, (ptr + n) % pcm->buffer_bytes);
 
-	while (r->head != tail) {
-		void *src = (u8 *)r->buf + (size_t)r->head * r->entry_size;
-		u32 nbytes = *(u32 *)(src + MZ0380_DESC_BYTECOUNT_OFFSET);
-
-		if (nbytes == 0 || nbytes > r->entry_size)
-			goto advance;
-
-		produced = nbytes;
-
-		if (pcm->hw_ptr_bytes + produced <= pcm->buffer_bytes) {
-			dst = ss->runtime->dma_area + pcm->hw_ptr_bytes;
-			memcpy(dst, (u8 *)src + MZ0380_DESC_PAYLOAD_OFFSET,
-			       produced);
-			pcm->hw_ptr_bytes += produced;
-		} else {
-			size_t first = pcm->buffer_bytes - pcm->hw_ptr_bytes;
-			size_t rest  = produced - first;
-			dst = ss->runtime->dma_area + pcm->hw_ptr_bytes;
-			memcpy(dst,
-			       (u8 *)src + MZ0380_DESC_PAYLOAD_OFFSET,
-			       first);
-			memcpy(ss->runtime->dma_area,
-			       (u8 *)src + MZ0380_DESC_PAYLOAD_OFFSET + first,
-			       rest);
-			pcm->hw_ptr_bytes = rest;
-		}
-
-advance:
-		r->head = (r->head + 1) % r->nr_entries;
-		mz_cfg_write(dev, r->head_reg, r->head);
+	pcm->period_fill += n;
+	if (pcm->period_fill >= pcm->period_bytes) {
+		pcm->period_fill %= pcm->period_bytes;
+		snd_pcm_period_elapsed(ss);
 	}
-
-	snd_pcm_period_elapsed(ss);
 }
 EXPORT_SYMBOL_GPL(mz0380_audio_period_elapsed);
 
@@ -191,7 +193,7 @@ int mz0380_audio_register(struct mz0380_dev *dev)
 	if (dev->audio_registered)
 		return 0;
 
-	ret = snd_card_new(&dev->pci->dev, SNDRV_DEFAULT_IDX1, "mz0380",
+	ret = snd_card_new(&dev->pci->dev, SNDRV_DEFAULT_IDX1, "HD60Pro",
 			   THIS_MODULE, sizeof(*pcm), &card);
 	if (ret)
 		return ret;
@@ -203,18 +205,18 @@ int mz0380_audio_register(struct mz0380_dev *dev)
 	dev->snd_pcm  = pcm;
 
 	strscpy(card->driver, "mz0380", sizeof(card->driver));
-	strscpy(card->shortname, "mz0380 HDMI", sizeof(card->shortname));
+	strscpy(card->shortname, "HD60 Pro HDMI", sizeof(card->shortname));
 	snprintf(card->longname, sizeof(card->longname),
-		 "%s on %s", mz0380_boards[dev->board].name,
+		 "%s HDMI audio at %s", mz0380_boards[dev->board].name,
 		 pci_name(dev->pci));
 
-	ret = snd_pcm_new(card, "mz0380 HDMI", 0, 0, 1, &pcm_dev);
+	ret = snd_pcm_new(card, "HD60 Pro HDMI", 0, 0, 1, &pcm_dev);
 	if (ret)
 		goto fail_card;
 	pcm->pcm = pcm_dev;
 	pcm_dev->private_data = dev;
 	pcm_dev->info_flags = 0;
-	strscpy(pcm_dev->name, "mz0380 HDMI", sizeof(pcm_dev->name));
+	strscpy(pcm_dev->name, "HD60 Pro HDMI", sizeof(pcm_dev->name));
 	snd_pcm_set_ops(pcm_dev, SNDRV_PCM_STREAM_CAPTURE, &mz0380_pcm_ops);
 	snd_pcm_set_managed_buffer_all(pcm_dev,
 				       SNDRV_DMA_TYPE_VMALLOC, NULL,
