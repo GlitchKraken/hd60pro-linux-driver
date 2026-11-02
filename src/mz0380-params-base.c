@@ -602,6 +602,40 @@ MODULE_PARM_DESC(rx_strap,
 		 "M109: GPIO8 companion reset/power strap level after the receiver reset (def:0, the level this driver has always driven; 1 = release; 0xffffffff = do not drive it at all)");
 
 /*
+ * HDMI OUT: the IT66121 transmitter at I2C 0x98 (mz0380-hdmitx.c). It only
+ * talks to the transmitter through the I2C proxy, never the encoder, so it is
+ * on by default. hdmitx_input is REG 0x70 as written: bits 7:6 colour format
+ * (1 = YUV 4:2:2), bit 4 CCIR656, bit 3 embedded sync, bit 2 DDR, bits 1:0
+ * input PCLK delay. 0x41 was swept on hardware: separate syncs, delay 1 (2 is
+ * also clean; 0 and 3 are not).
+ */
+bool mz0380_hdmitx = true;
+module_param_named(hdmitx, mz0380_hdmitx, bool, 0644);
+MODULE_PARM_DESC(hdmitx,
+		 "Bring up the IT66121 HDMI OUT passthrough transmitter at probe (def:1)");
+
+bool mz0380_hdmitx_hdmi = true;
+module_param_named(hdmitx_hdmi, mz0380_hdmitx_hdmi, bool, 0644);
+MODULE_PARM_DESC(hdmitx_hdmi,
+		 "HDMI OUT in HDMI mode with an AVI infoframe (1) or plain DVI (0) (def:1)");
+
+unsigned int mz0380_hdmitx_input = 0x41;
+module_param_named(hdmitx_input, mz0380_hdmitx_input, uint, 0644);
+MODULE_PARM_DESC(hdmitx_input,
+		 "IT66121 input mode register 0x70 (def:0x41 = YUV 4:2:2, separate syncs, PCLK delay 1)");
+
+bool mz0380_hdmitx_audio = true;
+module_param_named(hdmitx_audio, mz0380_hdmitx_audio, bool, 0644);
+MODULE_PARM_DESC(hdmitx_audio,
+		 "Pass the receiver's I2S audio (2ch 48 kHz) through HDMI OUT; needs hdmitx_hdmi=1 (def:1)");
+
+/* The receiver's MCLK ratio on this board is unproven; sweep 0-3 with "tx". */
+unsigned int mz0380_hdmitx_mclk = 1;
+module_param_named(hdmitx_mclk, mz0380_hdmitx_mclk, uint, 0644);
+MODULE_PARM_DESC(hdmitx_mclk,
+		 "IT66121 external MCLK ratio, register 0x58 bits 3:2: 0=128fs 1=256fs 2=512fs 3=1024fs (def:1, as mainline)");
+
+/*
  * M166: the shipping default is now the known-good capture configuration.
  *
  * This was `bool mz0380_enable_dma;` - off - since bring-up, and every successful

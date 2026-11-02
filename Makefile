@@ -29,6 +29,7 @@ mz0380-objs := \
 	src/mz0380-mst3367-debug.o \
 	src/mz0380-mst3367-signal.o \
 	src/mz0380-mst3367-bitbang.o \
+	src/mz0380-hdmitx.o \
 	src/mz0380-dma.o \
 	src/mz0380-dma-extent.o \
 	src/mz0380-dma-stream.o \

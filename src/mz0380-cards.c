@@ -115,6 +115,10 @@ int mz0380_card_setup(struct mz0380_dev *dev)
 	 */
 	mz0380_mst3367_bringup(dev);
 
+	/* HDMI OUT passthrough; failure only leaves the output dark */
+	if (mz0380_hdmitx)
+		mz0380_hdmitx_enable(dev);
+
 	if (!mz0380_enable_video) {
 		printk(KERN_INFO
 		       "%s: probe-safe V4L2 node disabled; load with enable_video=1 when you want /dev/video*\n",

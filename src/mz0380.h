@@ -786,6 +786,11 @@ int mz0380_enum_dv_timings(struct file *file, void *fh,
 int mz0380_dv_timings_cap(struct file *file, void *fh,
 			  struct v4l2_dv_timings_cap *cap);
 
+/* IT66121 HDMI OUT transmitter (mz0380-hdmitx.c) */
+int mz0380_hdmitx_enable(struct mz0380_dev *dev);
+void mz0380_hdmitx_status(struct mz0380_dev *dev);
+int mz0380_hdmitx_write_reg(struct mz0380_dev *dev, u16 reg, u8 val);
+
 // pattern-check: skip two function prototypes, procedural module, no abstraction
 /* MST3367 receiver bring-up + signal detect (mz0380-mst3367.c) */
 int mz0380_mst3367_bringup(struct mz0380_dev *dev);
@@ -851,6 +856,11 @@ extern bool mz0380_strict_geometry;
 extern unsigned int mz0380_expect_frame_bytes;
 void mz0380_credit_rearm(struct mz0380_dev *dev);
 extern unsigned int mz0380_rx_strap;
+extern bool mz0380_hdmitx;
+extern bool mz0380_hdmitx_hdmi;
+extern unsigned int mz0380_hdmitx_input;
+extern bool mz0380_hdmitx_audio;
+extern unsigned int mz0380_hdmitx_mclk;
 extern bool mz0380_enable_dma;
 extern unsigned int mz0380_start_delay_ms;
 extern bool mz0380_stream_nosg;
