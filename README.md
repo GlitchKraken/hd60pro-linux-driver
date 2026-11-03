@@ -18,7 +18,14 @@ exposes the result as a V4L2 capture device.
 > 1920x1080 I420 frames - no encoder in the delivery path. `post_skip` throttles
 > the rate: the card's preview bitmap step is `post_skip+1`, and full-rate raw
 > at 1080p60 is ~186 MB/s against a link this card negotiates as PCIe x1 Gen1.
-> Audio is not implemented.
+>
+> **HDMI OUT passthrough and HDMI audio capture work as of 2026-11-02.** The
+> card's HDMI OUT port now carries the source's picture and sound to a monitor,
+> and the source's audio is captured to the PC as an ALSA device, **HD60 Pro
+> HDMI**, which OBS records alongside the video. Both are on by default and
+> hardware-validated with a Nintendo Switch 2 at 1080p60 into OBS, with a
+> 1440p monitor on HDMI OUT. See
+> [HDMI OUT passthrough and audio](#hdmi-out-passthrough-and-audio).
 
 This is reverse-engineered development code, not a mainline or production
 driver. Read the [spawn-budget warning](#encoder-spawn-budget) before testing.
@@ -41,12 +48,24 @@ driver. Read the [spawn-budget warning](#encoder-spawn-budget) before testing.
 - Legacy single-frame, planar I420 capture with the default raw profile.
 - V4L2 compliance: 148/148 tests pass; the five warnings are the unsupported
   `DV_RX_POWER_PRESENT` indication.
-- Builds validated with clang/lld and `W=1` against Linux 6.18 LTS and 7.2.
+- HDMI OUT passthrough, picture and sound, through the card's IT66121
+  transmitter. Any monitor resolution works; it is sent the source's 1080p.
+- HDMI audio capture: 2-channel, 16-bit, 48 kHz PCM as the ALSA capture device
+  `HD60 Pro HDMI`, usable from OBS, PipeWire/PulseAudio and `arecord`.
+- DKMS install that autoloads the module at boot.
+- Builds validated with clang/lld and `W=1` against Linux 6.18 LTS, 7.2 and
+  7.3.
 
 Not implemented or not yet proved:
 
-- Audio PCM DMA. `enable_audio=1` registers only an inert ALSA scaffold.
-- Resolutions other than 1920x1080.
+- Capturing source resolutions other than 1920x1080. This is about the
+  source's output, not the monitor on HDMI OUT.
+- Surround audio. Capture and passthrough are stereo only; set the source's
+  audio output to stereo.
+- Audio without video. The card captures audio inside the same pipeline as
+  video, so the ALSA device only delivers while the V4L2 node is streaming.
+- Re-running the HDMI OUT setup automatically after a monitor swap or a source
+  mode change (`echo tx | sudo tee /proc/mz0380-hdmi` does it by hand).
 - Native webcam-style compatibility with every camera application. The live
   V4L2 node currently advertises compressed H.264; applications that require
   raw YUYV/NV12 camera frames may not list or accept it.
@@ -55,7 +74,7 @@ Not implemented or not yet proved:
   dedicated hardware run.
 - A genuinely changed returning HDMI mode and its controlled replacement.
 - Automatic HPD recovery for a connected-but-unlocked outage.
-- DKMS packaging, module signing, distribution packages and mainline submission.
+- Module signing, distribution packages and mainline submission.
 
 ## Supported cards
 
@@ -148,10 +167,10 @@ The host module only handshakes with that already-running firmware and then
 controls capture through the PCIe mailbox.
 
 A real mains/PSU power removal restarts the card firmware and clears a wedged
-card-side encoder state. It does not make the Linux kernel module persist: this
-project has no DKMS package, boot-time service, or automatic module-loading
-setup yet. After Linux boots, load the module again with the recommended
-profile:
+card-side encoder state. If the module is installed with
+[`sudo make dkms-install`](#install), it loads by itself at the next boot and
+nothing else is needed. Without an install, load it again from the build tree
+with the recommended profile:
 
 ```bash
 sudo env \
@@ -237,16 +256,27 @@ sudo make install
 sudo modprobe mz0380
 ```
 
-Either way `/etc/modprobe.d/mz0380.conf` is installed. It sets no options - it
-pulls in the V4L2/ALSA dependencies and documents the knobs worth knowing,
-commented out. To remove: `sudo make dkms-uninstall` or `sudo make uninstall`.
+Either way `/etc/modprobe.d/mz0380.conf` is installed. It pulls in the
+V4L2/ALSA dependencies, sets the two options where `mz0380-live.sh` differs
+from the module defaults (`signal_poll_ms=4000 procfs_verbosity=2`), and
+documents the other knobs worth knowing, commented out. To remove:
+`sudo make dkms-uninstall` or `sudo make uninstall`.
 
-Verify:
+Verify after the next boot:
 
 ```bash
+lsmod | grep mz0380
 v4l2-ctl --list-devices
-v4l2-ctl -d /dev/video0 --all
+arecord -l | grep -i hd60
 ```
+
+Use a full shutdown and power-on rather than a reboot when you can: a warm
+reboot may leave the card powered, carrying over its
+[encoder spawn count](#encoder-spawn-budget).
+
+To test a changed build once it is installed, `sudo rmmod mz0380` first, then
+reinstall with `sudo make dkms-uninstall && sudo make dkms-install`, or load the
+new build directly with `mz0380-live.sh`.
 
 The development workflow below (`mz0380-live.sh`) is a different thing: it
 insmods the module straight out of the build tree with explicit parameters, for
@@ -363,6 +393,62 @@ With the validated all-frame H.264 schedule, 1080p60 produces approximately
 With `persistent_h264=1`, closing/reopening the ordinary same-mode OBS source
 attaches to the existing pipeline rather than issuing another `SET_VIC`. A real
 mode change queues one controlled encoder replacement at the next attachment.
+
+For sound, also add **Audio Input Capture (PipeWire/PulseAudio)** and pick the
+`HD60 Pro HDMI` device (PipeWire may list it as "HD60 Pro HDMI Analog Stereo").
+To hear it, set **Edit → Advanced Audio Properties → Audio Monitoring** to
+**Monitor and Output** for that source.
+
+## HDMI OUT passthrough and audio
+
+Both are on by default; there is nothing to load or configure.
+
+**HDMI OUT.** Connect a monitor to the card's HDMI OUT port. The driver
+programs the card's ITE IT66121 transmitter at probe, so the source's picture
+and sound appear on the monitor as soon as the module loads, with or without
+OBS running. The monitor can be any resolution - it receives the source's
+1080p and scales it. Audio is 2-channel 48 kHz LPCM, so set the source's audio
+output to stereo (on a Switch: *System Settings → TV Output → TV Sound →
+Stereo*), and turn off HDR, which the card cannot carry.
+
+**Audio capture.** The ALSA card `HD60 Pro HDMI` (`hw:HD60Pro`) delivers
+16-bit stereo at 48 kHz. Audio flows only while video is streaming, because
+the card captures both in one pipeline. A quick check while OBS or another
+application has the video node open:
+
+```bash
+arecord -D hw:HD60Pro -f S16_LE -r 48000 -c 2 -d 5 test.wav && aplay test.wav
+```
+
+Neither feature starts the card's encoder, so neither costs encoder spawns.
+
+**Diagnostics** through `/proc/mz0380-hdmi` (root only):
+
+| Command | Effect |
+|---|---|
+| `echo tx > /proc/mz0380-hdmi` | Re-run the HDMI OUT setup, e.g. after swapping monitors. |
+| `echo txstat > /proc/mz0380-hdmi` | Log the transmitter status: hot-plug, monitor detected, input video stable, audio CTS. |
+| `echo 'txw REG VAL' > /proc/mz0380-hdmi` | Write one IT66121 register (`0x100`-`0x1ff` is bank 1). |
+| `echo audio > /proc/mz0380-hdmi` | Log the audio event count, last period index and a sample of each period buffer. |
+
+Results go to `dmesg`. Module parameters, all writable at runtime through
+`/sys/module/mz0380/parameters/` except `audio_dma`. The `hdmitx*` ones take
+effect at the next `tx`, `aic_input` at the next stream start:
+
+| Parameter | Default | Meaning |
+|---|---|---|
+| `hdmitx` | `1` | Set up HDMI OUT at probe. |
+| `hdmitx_hdmi` | `1` | HDMI mode with infoframes; `0` is DVI, with no audio. |
+| `hdmitx_input` | `0x41` | Transmitter input format: YUV 4:2:2, separate syncs, input clock delay 1. Delay 2 (`0x42`) also works. |
+| `hdmitx_audio` | `1` | Pass audio through HDMI OUT. |
+| `hdmitx_mclk` | `1` | Transmitter audio MCLK ratio (256fs). |
+| `audio_dma` | `1` | Register the audio capture buffers. Read at load. |
+| `aic_input` | `0` | Audio input requested from the card. Only `0` starts capture. |
+
+How these were found - the transmitter's input wiring by sweeping its
+registers live, and the card's audio path by disassembling its firmware - is
+recorded in the headers of `src/mz0380-hdmitx.c`, `src/mz0380-audio-dma.c`
+and the corresponding commit messages.
 
 ### HDMI loss and NO SIGNAL behavior
 
@@ -722,6 +808,16 @@ kept because the alternative is worse, not because it could not be avoided:
 Since the project is GPL-2.0-or-later regardless, the honest thing is to keep
 the citation rather than paraphrase the code to obscure it.
 
+**Mainline ite-it66121 (Linux DRM bridge driver, GPL-2) - used, and
+credited.** `src/mz0380-hdmitx.c` follows that driver's IT66121 power-up,
+mode-set, AFE, audio and mute sequences, adapted to reach the chip through the
+card's I2C mailbox proxy. The board-specific input settings (separate syncs,
+non-sequential IO mode, input clock delay) are not in mainline; they were found
+by sweeping the registers on hardware, with register meanings from ITE's
+public IT66121 datasheet and register list.
+
 **Everything else** comes from this project's own reverse engineering of the
-card's firmware image (`ep.ko`, `video_capture_mgr`, `tinyvenc5`/`tinyvenc7`)
-and the Windows driver, documented milestone by milestone in `RE_FINDINGS.md`.
+card's firmware image (`ep.ko`, `video_capture_mgr`, `tinyvenc5`/`tinyvenc7`,
+and for audio `audio_capture_mgr`, `capture_app_infinite` and `vpl_dmac.ko`)
+and the Windows driver, documented milestone by milestone in `RE_FINDINGS.md`
+and, for HDMI OUT and audio, in the source headers and commit messages.
